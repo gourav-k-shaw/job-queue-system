@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: job-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: job-redis
+    ports:
+      - "${REDIS_PORT}:6379"
+
+  backend:
+    build:
+      context: ./backend
+    container_name: job-backend
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+
+      SERVER_PORT: 8080
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "${BACKEND_PORT}:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: job-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT}:5173"
+
+volumes:
+  postgres_data:
