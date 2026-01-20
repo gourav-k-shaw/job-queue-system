@@ -2,6 +2,7 @@ package com.example.backend.service;
 
 import com.example.backend.dto.CreateJobRequest;
 import com.example.backend.dto.CreateJobResponse;
+import com.example.backend.exception.QuotaExceededException;
 import com.example.backend.model.JobEntity;
 import com.example.backend.model.JobStatus;
 import com.example.backend.repository.JobRepository;
@@ -20,6 +21,7 @@ public class JobService {
 
     private final JobRepository jobRepository;
     private final ObjectMapper objectMapper;
+    private static final int MAX_CONCURRENT_RUNNING_JOBS = 5;
 
     public JobService(JobRepository jobRepository, ObjectMapper objectMapper) {
         this.jobRepository = jobRepository;
@@ -29,6 +31,13 @@ public class JobService {
     @Transactional
     public CreateJobResponse submitJob(CreateJobRequest request) {
         String tenantId = TenantContext.getTenantId();
+
+        long runningCount = jobRepository.countByTenantIdAndStatus(tenantId, JobStatus.RUNNING);
+        if (runningCount >= MAX_CONCURRENT_RUNNING_JOBS) {
+            throw new QuotaExceededException(
+                    "Max concurrent running jobs reached (" + MAX_CONCURRENT_RUNNING_JOBS + ") for tenant: "
+                            + tenantId);
+        }
 
         String idempotencyKey = request.getIdempotencyKey();
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
