@@ -40,3 +40,10 @@ logging:
   level:
     org.flywaydb: DEBUG
     org.springframework.boot.autoconfigure: DEBUG
+
+jobs:
+  worker:
+    enabled: true
+    poll-interval-ms: 1000
+    lease-seconds: 30
+
