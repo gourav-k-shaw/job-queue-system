@@ -19,4 +19,13 @@ public class GlobalExceptionHandler {
                         "error", "QUOTA_EXCEEDED",
                         "message", ex.getMessage()));
     }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleRateLimitExceeded(RateLimitExceededException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(
+                Map.of(
+                        "timestamp", Instant.now().toString(),
+                        "error", "RATE_LIMIT_EXCEEDED",
+                        "message", ex.getMessage()));
+    }
 }

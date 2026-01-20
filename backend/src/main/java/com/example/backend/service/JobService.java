@@ -8,6 +8,7 @@ import com.example.backend.model.JobStatus;
 import com.example.backend.repository.JobRepository;
 import com.example.backend.tenant.TenantContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.example.backend.ratelimit.RateLimitService;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -22,15 +23,18 @@ public class JobService {
     private final JobRepository jobRepository;
     private final ObjectMapper objectMapper;
     private static final int MAX_CONCURRENT_RUNNING_JOBS = 5;
+    private final RateLimitService rateLimitService;
 
-    public JobService(JobRepository jobRepository, ObjectMapper objectMapper) {
+    public JobService(JobRepository jobRepository, ObjectMapper objectMapper, RateLimitService rateLimitService) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
+        this.rateLimitService = rateLimitService;
     }
 
     @Transactional
     public CreateJobResponse submitJob(CreateJobRequest request) {
         String tenantId = TenantContext.getTenantId();
+        rateLimitService.checkAndConsumeJobCreateAllowance(tenantId);
 
         long runningCount = jobRepository.countByTenantIdAndStatus(tenantId, JobStatus.RUNNING);
         if (runningCount >= MAX_CONCURRENT_RUNNING_JOBS) {
