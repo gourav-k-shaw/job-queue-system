@@ -2,7 +2,11 @@ package com.example.backend.model;
 
 import jakarta.persistence.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
+
+import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -18,14 +22,9 @@ public class JobEntity {
     @Column(name = "tenant_id", nullable = false, length = 100)
     private String tenantId;
 
-    /**
-     * Keeping payload as String is the simplest way to store JSONB in Postgres.
-     * We'll store raw JSON string.
-     *
-     * Later: you can upgrade this to JsonNode / Hibernate Types if you want.
-     */
+    @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "payload", nullable = false, columnDefinition = "jsonb")
-    private String payload;
+    private JsonNode payload;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -75,11 +74,11 @@ public class JobEntity {
         this.tenantId = tenantId;
     }
 
-    public String getPayload() {
+    public JsonNode getPayload() {
         return payload;
     }
 
-    public void setPayload(String payload) {
+    public void setPayload(JsonNode payload) {
         this.payload = payload;
     }
 
