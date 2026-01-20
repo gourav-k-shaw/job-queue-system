@@ -108,4 +108,14 @@ public interface JobRepository extends JpaRepository<JobEntity, UUID> {
             @Param("status") String status,
             @Param("attempts") int attempts,
             @Param("lastError") String lastError);
+
+    @Query(value = """
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE tenant_id = :tenantId
+            AND status = 'RUNNING'
+            AND lease_until IS NOT NULL
+            AND lease_until > now()
+            """, nativeQuery = true)
+    long countActiveRunningJobs(@Param("tenantId") String tenantId);
 }

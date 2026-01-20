@@ -45,17 +45,28 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiErrorResponse> handleGeneric(
             Exception ex,
-            HttpServletRequest request
-    ) {
+            HttpServletRequest request) {
         ApiErrorResponse body = new ApiErrorResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR.value(),
                 "INTERNAL_ERROR",
                 ex.getMessage(),
                 request.getRequestURI(),
-                TenantContext.getTenantId()
-        );
+                TenantContext.getTenantId());
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }
 
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiErrorResponse> handleNotFoundException(
+            NotFoundException ex,
+            HttpServletRequest request) {
+        ApiErrorResponse body = new ApiErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                "NOT_FOUND",
+                ex.getMessage(),
+                request.getRequestURI(),
+                TenantContext.getTenantId());
+
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(body);
+    }
 }
