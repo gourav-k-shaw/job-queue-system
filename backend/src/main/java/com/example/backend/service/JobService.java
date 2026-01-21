@@ -9,6 +9,7 @@ import com.example.backend.model.JobEntity;
 import com.example.backend.model.JobStatus;
 import com.example.backend.repository.JobRepository;
 import com.example.backend.tenant.TenantContext;
+import com.example.backend.ws.WsPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.example.backend.ratelimit.RateLimitService;
 
@@ -30,11 +31,16 @@ public class JobService {
     private final ObjectMapper objectMapper;
     private static final int MAX_CONCURRENT_RUNNING_JOBS = 5;
     private final RateLimitService rateLimitService;
+    private final JobSummaryService jobSummaryService;
+    private final WsPublisher wsPublisher;
 
-    public JobService(JobRepository jobRepository, ObjectMapper objectMapper, RateLimitService rateLimitService) {
+    public JobService(JobRepository jobRepository, ObjectMapper objectMapper, RateLimitService rateLimitService,
+            JobSummaryService jobSummaryService, WsPublisher wsPublisher) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
+        this.jobSummaryService = jobSummaryService;
+        this.wsPublisher = wsPublisher;
     }
 
     @Transactional
@@ -76,6 +82,10 @@ public class JobService {
 
         try {
             JobEntity saved = jobRepository.save(job);
+            wsPublisher.publishJobUpdate(saved);
+            wsPublisher.publishSummaryUpdate(
+                    tenantId,
+                    jobSummaryService.getSummaryForTenant(tenantId));
             return new CreateJobResponse(saved.getId(), saved.getStatus(), false);
 
         } catch (DataIntegrityViolationException ex) {
