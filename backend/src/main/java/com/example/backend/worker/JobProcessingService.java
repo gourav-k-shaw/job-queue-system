@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import java.util.Random;
+import com.example.backend.metrics.JobMetrics;
 
 @Service
 public class JobProcessingService {
@@ -18,12 +19,14 @@ public class JobProcessingService {
     private static final Logger log = LoggerFactory.getLogger(JobProcessingService.class);
     private final WsPublisher wsPublisher;
     private final JobSummaryService jobSummaryService;
+    private final JobMetrics jobMetrics;
 
     public JobProcessingService(JobRepository jobRepository, WsPublisher wsPublisher,
-            JobSummaryService jobSummaryService) {
+            JobSummaryService jobSummaryService, JobMetrics jobMetrics) {
         this.jobRepository = jobRepository;
         this.wsPublisher = wsPublisher;
         this.jobSummaryService = jobSummaryService;
+        this.jobMetrics = jobMetrics;
     }
 
     public void process(JobEntity job) {
@@ -34,6 +37,7 @@ public class JobProcessingService {
 
             // 2) Mark DONE
             jobRepository.markJobAsDone(job.getId());
+            jobMetrics.incCompleted();
 
             // 3) Broadcast DONE update
             job.setStatus(com.example.backend.model.JobStatus.DONE);
@@ -87,6 +91,7 @@ public class JobProcessingService {
             job.setLastError(errorMsg);
             job.setLeaseUntil(null);
             log.error("Job moved to DLQ jobId={} after {} attempts", job.getId(), nextAttempts);
+            jobMetrics.incDlq();
         } else {
             // You may choose to mark FAILED first, then PENDING.
             // For simplicity we go directly back to PENDING.
@@ -96,6 +101,8 @@ public class JobProcessingService {
             job.setLastError(errorMsg);
             job.setLeaseUntil(null);
             log.warn("Job failed jobId={} attempt={} error={}", job.getId(), nextAttempts, errorMsg);
+            jobMetrics.incFailed();
+            jobMetrics.incRetried();
         }
     }
 }

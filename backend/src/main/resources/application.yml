@@ -34,7 +34,12 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
 
 logging:
   level:
@@ -46,4 +51,5 @@ jobs:
     enabled: true
     poll-interval-ms: 1000
     lease-seconds: 30
+
 

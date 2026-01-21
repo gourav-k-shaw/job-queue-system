@@ -5,14 +5,15 @@ import com.example.backend.dto.CreateJobResponse;
 import com.example.backend.dto.JobResponse;
 import com.example.backend.dto.JobSummaryResponse;
 import com.example.backend.exception.QuotaExceededException;
+import com.example.backend.metrics.JobMetrics;
 import com.example.backend.model.JobEntity;
 import com.example.backend.model.JobStatus;
 import com.example.backend.repository.JobRepository;
 import com.example.backend.tenant.TenantContext;
 import com.example.backend.ws.WsPublisher;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.example.backend.ratelimit.RateLimitService;
 
+import com.example.backend.ratelimit.RateLimitService;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +21,9 @@ import com.example.backend.exception.NotFoundException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -33,23 +37,30 @@ public class JobService {
     private final RateLimitService rateLimitService;
     private final JobSummaryService jobSummaryService;
     private final WsPublisher wsPublisher;
+    private static final Logger log = LoggerFactory.getLogger(JobService.class);
+    private final JobMetrics jobMetrics;
 
     public JobService(JobRepository jobRepository, ObjectMapper objectMapper, RateLimitService rateLimitService,
-            JobSummaryService jobSummaryService, WsPublisher wsPublisher) {
+            JobSummaryService jobSummaryService, WsPublisher wsPublisher, JobMetrics jobMetrics) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.rateLimitService = rateLimitService;
         this.jobSummaryService = jobSummaryService;
         this.wsPublisher = wsPublisher;
+        this.jobMetrics = jobMetrics;
     }
 
     @Transactional
     public CreateJobResponse submitJob(CreateJobRequest request) {
         String tenantId = TenantContext.getTenantId();
+        log.info("event=JOB_SUBMIT_REQUEST tenant={} idempotencyKey={}",
+                tenantId, request.getIdempotencyKey());
+
         rateLimitService.checkAndConsumeJobCreateAllowance(tenantId);
 
         long runningCount = jobRepository.countByTenantIdAndStatus(tenantId, JobStatus.RUNNING);
         if (runningCount >= MAX_CONCURRENT_RUNNING_JOBS) {
+            jobMetrics.incQuotaBlocked();
             throw new QuotaExceededException(
                     "Max concurrent running jobs reached (" + MAX_CONCURRENT_RUNNING_JOBS + ") for tenant: "
                             + tenantId);
@@ -61,6 +72,8 @@ public class JobService {
 
             if (existing.isPresent()) {
                 JobEntity job = existing.get();
+                log.info("event=JOB_DEDUPLICATED tenant={} jobId={} idempotencyKey={}",
+                        tenantId, job.getId(), idempotencyKey);
                 return new CreateJobResponse(job.getId(), job.getStatus(), true);
             }
         }
@@ -86,6 +99,9 @@ public class JobService {
             wsPublisher.publishSummaryUpdate(
                     tenantId,
                     jobSummaryService.getSummaryForTenant(tenantId));
+            log.info("event=JOB_SUBMITTED tenant={} jobId={} status={}",
+                    tenantId, saved.getId(), saved.getStatus());
+            jobMetrics.incSubmitted();
             return new CreateJobResponse(saved.getId(), saved.getStatus(), false);
 
         } catch (DataIntegrityViolationException ex) {
