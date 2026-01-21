@@ -5,14 +5,19 @@ import com.example.backend.repository.JobRepository;
 import com.example.backend.service.JobSummaryService;
 import com.example.backend.ws.WsPublisher;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class JobClaimService {
+
+    private static final Logger log = LoggerFactory.getLogger(JobClaimService.class);
 
     private static final int MAX_RUNNING_PER_TENANT = 5;
 
@@ -21,7 +26,13 @@ public class JobClaimService {
     private final WsPublisher wsPublisher;
     private final JobSummaryService jobSummaryService;
 
-    public JobClaimService(JobRepository jobRepository, WorkerProperties workerProperties, WsPublisher wsPublisher,
+    // simple worker id for logs (per app instance)
+    private final String workerId = UUID.randomUUID().toString();
+
+    public JobClaimService(
+            JobRepository jobRepository,
+            WorkerProperties workerProperties,
+            WsPublisher wsPublisher,
             JobSummaryService jobSummaryService) {
         this.jobRepository = jobRepository;
         this.workerProperties = workerProperties;
@@ -31,14 +42,13 @@ public class JobClaimService {
 
     @Transactional
     public Optional<JobEntity> claimNextJob() {
-        // Step 1: lock one job row (or skip if locked by other worker)
-        // Optional<JobEntity> jobOpt =
-        // jobRepository.findOneAvailableJobForUpdateSkipLocked();
+
         Optional<JobEntity> jobOpt = jobRepository
                 .findOneAvailableJobForUpdateSkipLockedWithTenantQuota(MAX_RUNNING_PER_TENANT);
 
-        if (jobOpt.isEmpty())
+        if (jobOpt.isEmpty()) {
             return Optional.empty();
+        }
 
         JobEntity job = jobOpt.get();
 
@@ -49,6 +59,9 @@ public class JobClaimService {
         // Refresh in-memory object
         job.setLeaseUntil(leaseUntil);
         job.setStatus(com.example.backend.model.JobStatus.RUNNING);
+
+        log.info("event=JOB_CLAIMED worker={} tenant={} jobId={} leaseUntil={}",
+                workerId, job.getTenantId(), job.getId(), leaseUntil);
 
         wsPublisher.publishJobUpdate(job);
         wsPublisher.publishSummaryUpdate(
