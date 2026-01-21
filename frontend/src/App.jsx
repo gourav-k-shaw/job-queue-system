@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { fetchJobs, fetchSummary, submitJob } from "./api";
 import { useJobWebSocket } from "./useJobWebSocket";
 
+const STATUSES = ["PENDING", "RUNNING", "DONE", "DLQ"];
+
 export default function App() {
   const [tenantId, setTenantId] = useState("user1");
 
@@ -15,67 +17,97 @@ export default function App() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
 
+  // UI state
+  const [activeTab, setActiveTab] = useState("ALL"); // ALL | DLQ
+  const [statusFilter, setStatusFilter] = useState(""); // "" = all statuses (ALL tab only)
+  const [search, setSearch] = useState("");
   const [newJobShouldFail, setNewJobShouldFail] = useState(false);
 
-  // ✅ Load initial snapshot via REST
-  useEffect(() => {
-    let cancelled = false;
+  // Pagination state
+  const [page, setPage] = useState(0);
+  const [size] = useState(20);
 
-    async function loadInitial() {
-      try {
-        setLoading(true);
-        const s = await fetchSummary(tenantId);
-        const page = await fetchJobs(tenantId, { page: 0, size: 20 });
+  const [totalPages, setTotalPages] = useState(0);
+  const [totalElements, setTotalElements] = useState(0);
 
-        if (cancelled) return;
-        setSummary(s);
-        setJobs(page.content || []);
-      } catch (e) {
-        console.error(e);
-        alert("Failed to load initial data: " + e.message);
-      } finally {
-        if (!cancelled) setLoading(false);
+  // ✅ Fetch summary
+  async function loadSummary() {
+    const s = await fetchSummary(tenantId);
+    setSummary(s);
+  }
+
+  // ✅ Fetch jobs (server-side)
+  async function loadJobs() {
+    setLoading(true);
+    try {
+      let responsePage;
+
+      if (activeTab === "DLQ") {
+        // DLQ uses dedicated endpoint
+        responsePage = await fetchJobs(tenantId, { status: "DLQ", page, size });
+      } else {
+        // ALL tab
+        responsePage = await fetchJobs(tenantId, {
+          status: statusFilter || undefined,
+          page,
+          size,
+        });
       }
+
+      setJobs(responsePage.content || []);
+      setTotalPages(responsePage.totalPages ?? 0);
+      setTotalElements(responsePage.totalElements ?? 0);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to load jobs: " + e.message);
+    } finally {
+      setLoading(false);
     }
+  }
 
-    loadInitial();
-
-    return () => {
-      cancelled = true;
-    };
+  // ✅ On tenant change reset everything
+  useEffect(() => {
+    setPage(0);
+    setStatusFilter("");
+    setSearch("");
   }, [tenantId]);
 
-  // ✅ Live updates via WebSocket
+  // ✅ Load summary once + on tenant change
+  useEffect(() => {
+    loadSummary().catch((e) => console.error(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId]);
+
+  // ✅ Load jobs whenever any list dependency changes
+  useEffect(() => {
+    loadJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tenantId, activeTab, statusFilter, page, size]);
+
+  // ✅ WebSocket live updates
   useJobWebSocket({
     tenantId,
     onJobEvent: (event) => {
       if (event.eventType !== "JOB_UPDATED") return;
 
+      // update only if job exists in the current loaded page
       setJobs((prev) => {
         const idx = prev.findIndex((j) => j.id === event.jobId);
+        if (idx === -1) return prev; // ignore if not in current page
 
-        const updated = {
-          ...prev[idx],
-          id: event.jobId,
-          tenantId: event.tenantId,
+        const copy = [...prev];
+        copy[idx] = {
+          ...copy[idx],
           status: event.status,
           attempts: event.attempts,
           maxAttempts: event.maxAttempts,
           updatedAt: event.updatedAt,
         };
-
-        // If job isn't in list (new pending job), add it on top
-        if (idx === -1) return [updated, ...prev];
-
-        // Replace
-        const copy = [...prev];
-        copy[idx] = { ...copy[idx], ...updated };
         return copy;
       });
     },
     onSummaryEvent: (event) => {
       if (event.eventType !== "SUMMARY_UPDATED") return;
-
       setSummary({
         pending: event.pending,
         running: event.running,
@@ -91,24 +123,40 @@ export default function App() {
         type: "demo",
         shouldFail: newJobShouldFail,
       };
-
       const idempotencyKey = `ui-${Date.now()}`;
 
       await submitJob(tenantId, payload, idempotencyKey);
-      // ✅ no need to fetch again; websocket will update
+
+      // optional: refresh page 0 after creating a job
+      setPage(0);
+      await loadJobs();
+      await loadSummary();
     } catch (e) {
       console.error(e);
       alert("Job submission failed: " + e.message);
     }
   }
 
-  const rows = useMemo(() => jobs.slice(0, 20), [jobs]);
+  // ✅ Search filter is client-side (only filters current page)
+  const visibleJobs = useMemo(() => {
+    if (!search.trim()) return jobs;
+
+    const s = search.trim().toLowerCase();
+    return jobs.filter((j) => (j.id || "").toLowerCase().includes(s));
+  }, [jobs, search]);
+
+  const canGoPrev = page > 0;
+  const canGoNext = page + 1 < totalPages;
 
   return (
-    <div style={{ fontFamily: "sans-serif", padding: 20, maxWidth: 1100, margin: "0 auto" }}>
-      <h2>Job Queue Dashboard</h2>
+    <div style={{ fontFamily: "sans-serif", padding: 20, maxWidth: 1200, margin: "0 auto" }}>
+      <h2 style={{ marginBottom: 8 }}>Job Queue Dashboard</h2>
+      <p style={{ marginTop: 0, color: "#666", fontSize: 12 }}>
+        Server-side filtering + pagination • WebSocket live summary updates
+      </p>
 
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 16 }}>
+      {/* Controls */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginBottom: 16 }}>
         <label>
           Tenant:
           <input
@@ -127,11 +175,21 @@ export default function App() {
           shouldFail
         </label>
 
-        <button onClick={handleSubmitJob} style={{ padding: "6px 12px", cursor: "pointer" }}>
+        <button onClick={handleSubmitJob} style={btnStyle}>
           Submit Job
         </button>
 
-        {loading && <span>Loading...</span>}
+        <button
+          onClick={() => {
+            loadJobs();
+            loadSummary();
+          }}
+          style={btnStyle}
+        >
+          Refresh
+        </button>
+
+        {loading && <span style={{ fontSize: 12, color: "#666" }}>Loading...</span>}
       </div>
 
       {/* Summary Cards */}
@@ -142,9 +200,90 @@ export default function App() {
         <Card title="DLQ" value={summary.dlq} />
       </div>
 
+      {/* Tabs */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+        <TabButton
+          active={activeTab === "ALL"}
+          onClick={() => {
+            setActiveTab("ALL");
+            setPage(0);
+          }}
+        >
+          All Jobs
+        </TabButton>
+        <TabButton
+          active={activeTab === "DLQ"}
+          onClick={() => {
+            setActiveTab("DLQ");
+            setPage(0);
+          }}
+        >
+          DLQ
+        </TabButton>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        <label>
+          Status:
+          <select
+            value={activeTab === "DLQ" ? "DLQ" : statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setPage(0);
+            }}
+            style={{ marginLeft: 8, padding: 6 }}
+            disabled={activeTab === "DLQ"} // DLQ tab fixed
+          >
+            <option value="">All</option>
+            {STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={{ flex: 1, minWidth: 250 }}>
+          Search Job ID (current page):
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="e.g. 3f2a..."
+            style={{ marginLeft: 8, padding: 6, width: "100%" }}
+          />
+        </label>
+
+        <div style={{ fontSize: 12, color: "#666" }}>
+          Total: <b>{totalElements}</b> jobs • Page: <b>{page + 1}</b> / <b>{Math.max(totalPages, 1)}</b>
+        </div>
+      </div>
+
+      {/* Pagination controls */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 12 }}>
+        <button
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={!canGoPrev}
+          style={{ ...btnStyle, opacity: canGoPrev ? 1 : 0.5 }}
+        >
+          Prev
+        </button>
+
+        <button
+          onClick={() => setPage((p) => p + 1)}
+          disabled={!canGoNext}
+          style={{ ...btnStyle, opacity: canGoNext ? 1 : 0.5 }}
+        >
+          Next
+        </button>
+      </div>
+
       {/* Jobs Table */}
-      <div style={{ border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
-        <div style={{ padding: 12, fontWeight: "bold", background: "#f8f8f8" }}>Latest Jobs</div>
+      <div style={{ border: "1px solid #ddd", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ padding: 12, fontWeight: "bold", background: "#f8f8f8" }}>
+          {activeTab === "DLQ" ? "Dead Letter Queue Jobs" : "Jobs"}
+        </div>
+
         <table width="100%" cellPadding="10" style={{ borderCollapse: "collapse" }}>
           <thead style={{ background: "#fafafa" }}>
             <tr>
@@ -154,11 +293,14 @@ export default function App() {
               <th align="left">Updated At</th>
             </tr>
           </thead>
+
           <tbody>
-            {rows.map((j) => (
+            {visibleJobs.map((j) => (
               <tr key={j.id} style={{ borderTop: "1px solid #eee" }}>
                 <td style={{ fontFamily: "monospace", fontSize: 12 }}>{j.id}</td>
-                <td>{j.status}</td>
+                <td>
+                  <StatusPill status={j.status} />
+                </td>
                 <td>
                   {j.attempts}/{j.maxAttempts}
                 </td>
@@ -167,10 +309,11 @@ export default function App() {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && (
+
+            {visibleJobs.length === 0 && (
               <tr>
-                <td colSpan="4" style={{ padding: 12 }}>
-                  No jobs yet
+                <td colSpan="4" style={{ padding: 12, color: "#666" }}>
+                  No jobs on this page.
                 </td>
               </tr>
             )}
@@ -179,17 +322,70 @@ export default function App() {
       </div>
 
       <p style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-        Tip: Submit jobs and watch them move PENDING → RUNNING → DONE (or DLQ if shouldFail=true).
+        Tip: WebSocket updates <b>summary</b> live. For full list sync across pages, use <b>Refresh</b>.
       </p>
     </div>
   );
 }
 
+/* ---------------- UI Components ---------------- */
+
 function Card({ title, value }) {
   return (
-    <div style={{ flex: 1, border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
+    <div style={{ flex: 1, border: "1px solid #ddd", borderRadius: 10, padding: 12 }}>
       <div style={{ fontSize: 12, color: "#666" }}>{title}</div>
       <div style={{ fontSize: 24, fontWeight: "bold" }}>{value}</div>
     </div>
   );
 }
+
+function TabButton({ active, children, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        ...btnStyle,
+        background: active ? "#111" : "#fff",
+        color: active ? "#fff" : "#111",
+        border: "1px solid #111",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StatusPill({ status }) {
+  let bg = "#eee";
+  let fg = "#111";
+
+  if (status === "PENDING") bg = "#fff3cd";
+  if (status === "RUNNING") bg = "#d1ecf1";
+  if (status === "DONE") bg = "#d4edda";
+  if (status === "DLQ") bg = "#f8d7da";
+
+  return (
+    <span
+      style={{
+        padding: "4px 10px",
+        borderRadius: 999,
+        background: bg,
+        color: fg,
+        fontSize: 12,
+        fontWeight: "bold",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+const btnStyle = {
+  padding: "6px 12px",
+  cursor: "pointer",
+  borderRadius: 8,
+  border: "1px solid #ddd",
+  background: "#fff",
+  color: "#111",
+  fontWeight: 600,
+};
