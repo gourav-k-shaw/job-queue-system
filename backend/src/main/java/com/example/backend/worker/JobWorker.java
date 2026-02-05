@@ -24,7 +24,7 @@ public class JobWorker {
     private final JobRepository jobRepository;
     private final JobProcessingService jobProcessingService;
 
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledExecutorService scheduler;
 
     public JobWorker(WorkerProperties workerProperties, JobRepository jobRepository, JobClaimService jobClaimService,
             JobProcessingService jobProcessingService) {
@@ -41,24 +41,32 @@ public class JobWorker {
             return;
         }
 
-        log.info("Worker started with poll interval={}ms", workerId, workerProperties.getPollIntervalMs());
+        int concurrency = workerProperties.getConcurrency();
+        this.scheduler = Executors.newScheduledThreadPool(concurrency);
 
-        scheduler.scheduleWithFixedDelay(
-                this::pollOnceSafely,
-                0,
-                workerProperties.getPollIntervalMs(),
-                TimeUnit.MILLISECONDS);
-    }
+        log.info("Worker [{}] started with concurrency={}, poll interval={}ms",
+                workerId, concurrency, workerProperties.getPollIntervalMs());
 
-    private void pollOnceSafely() {
-        try {
-            pollOnce();
-        } catch (Exception e) {
-            log.error("Worker poll failed: {}", e.getMessage(), e);
+        // Schedule N independent polling tasks for true concurrency
+        for (int i = 0; i < concurrency; i++) {
+            final int threadIndex = i;
+            scheduler.scheduleWithFixedDelay(
+                    () -> pollOnceSafely(threadIndex),
+                    i * 100L, // Stagger start times to avoid thundering herd
+                    workerProperties.getPollIntervalMs(),
+                    TimeUnit.MILLISECONDS);
         }
     }
 
-    private void pollOnce() {
+    private void pollOnceSafely(int threadIndex) {
+        try {
+            pollOnce(threadIndex);
+        } catch (Exception e) {
+            log.error("Worker [{}] thread-{} poll failed: {}", workerId, threadIndex, e.getMessage(), e);
+        }
+    }
+
+    private void pollOnce(int threadIndex) {
         Optional<JobEntity> claimed = jobClaimService.claimNextJob();
 
         if (claimed.isEmpty()) {
@@ -67,11 +75,11 @@ public class JobWorker {
         }
 
         JobEntity job = claimed.get();
-        log.info("Worker [{}] claimed jobId={} tenant={} status={}",
-                workerId, job.getId(), job.getTenantId(), job.getStatus());
+        log.info("Worker [{}] thread-{} claimed jobId={} tenant={} status={}",
+                workerId, threadIndex, job.getId(), job.getTenantId(), job.getStatus());
 
         jobProcessingService.process(job);
-        log.info("Worker [{}] finished processing jobId={}", workerId, job.getId());
+        log.info("Worker [{}] thread-{} finished processing jobId={}", workerId, threadIndex, job.getId());
 
     }
 }
