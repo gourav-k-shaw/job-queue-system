@@ -51,5 +51,6 @@ jobs:
     enabled: true
     poll-interval-ms: 1000
     lease-seconds: 30
+    concurrency: 4
 
 

@@ -8,6 +8,7 @@ public class WorkerProperties {
     private boolean enabled = true;
     private long pollIntervalMs = 1000;
     private long leaseSeconds = 30;
+    private int concurrency = 4;
 
     public boolean isEnabled() {
         return enabled;
@@ -31,5 +32,13 @@ public class WorkerProperties {
 
     public void setLeaseSeconds(long leaseSeconds) {
         this.leaseSeconds = leaseSeconds;
+    }
+
+    public int getConcurrency() {
+        return concurrency;
+    }
+
+    public void setConcurrency(int concurrency) {
+        this.concurrency = concurrency;
     }
 }
